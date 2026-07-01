@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 # Canadian / transborder hubs treated as domestic (30 min customs clearing window)
 # instead of international (60 min).
 DOMESTIC_AIRPORT_CODES = {"YYC", "YVR", "YUL", "YYZ", "YEG", "YOW", "YWG", "YHZ"}
-DOMESTIC_KEYWORDS = ("CANADA", "USA", "UNITED STATES")
+DOMESTIC_KEYWORDS = ("VANCOUVER", "MONTREAL", "TORONTO", "WINNIPEG", "HALIFAX", "EDMONTON", "OTTAWA")
 
 
 @dataclass
@@ -65,7 +65,7 @@ class ManifestRow:
             return None
 
     def is_international(self) -> bool:
-        """Flights not originating in Canada/US get a longer customs clearing window."""
+        """Flights not originating in Canada get a longer customs clearing window."""
         origin_text = (self.origin_airport or "").strip().upper()
         if any(code in origin_text for code in DOMESTIC_AIRPORT_CODES):
             return False

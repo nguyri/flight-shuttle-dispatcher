@@ -1,0 +1,8 @@
+.DS_Store
+.env
+__pycache__/
+data/
+flight_cache.json
+flight_cache.json
+passenger_cache.json
+temp_manifest.csv

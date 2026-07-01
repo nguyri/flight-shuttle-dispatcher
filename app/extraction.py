@@ -121,6 +121,29 @@ def identify_key_columns(columns: List[str]) -> Tuple[Optional[str], Optional[st
     return flt_info_col, pickup_col
 
 
+def guess_name_column(columns: List[str]) -> Optional[str]:
+    """
+    Best-effort guess at which original column holds passenger names, for
+    display purposes only (the pipeline itself never depends on this).
+    Looks for a header containing "NAME"; falls back to "No." since some
+    manifests store passenger names there instead of a count. Returns None
+    if nothing plausible is found -- the caller should let the user pick
+    manually in that case, since manifest headers vary by source.
+    """
+    for header in columns:
+        if not header:
+            continue
+        clean = re.sub(r"[\s\-]", "", str(header)).upper()
+        if "NAME" in clean:
+            return header
+
+    for header in columns:
+        if header and str(header).strip().upper() in ("NO.", "NO"):
+            return header
+
+    return None
+
+
 def find_manifest_date(rows: List[ManifestRow], flt_info_col: str) -> Optional[str]:
     """
     Scans manifest rows for an embedded operational date, as a last resort when
