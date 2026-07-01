@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: flight-checker-app
+    restart: always
+    # Map the current root so that flight_cache.json and passenger_cache.json persist 
+    # directly on the host file system instead of disappearing when the container stops
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - VERBOSE_LOGGING=True
+      # Streamlit forces lookups on standard web sockets
+      - PYTHONUNBUFFERED=1
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx_proxy
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Keep your existing authorization file path volume structure
+      - ./auth:/etc/nginx/auth:ro
+    depends_on:
+      - app
