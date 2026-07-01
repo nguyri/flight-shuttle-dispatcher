@@ -1,5 +1,6 @@
 .DS_Store
 .env
+.htpasswd
 __pycache__/
 data/
 flight_cache.json
