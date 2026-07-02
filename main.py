@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+import tempfile
 import pandas as pd
 import streamlit as st
 import datetime
@@ -16,6 +17,10 @@ from app.pipeline import run_extraction_pipeline
 # Configuration paths for both caches
 FLIGHT_CACHE_PATH = Path("flight_cache.json")
 PASSENGER_CACHE_PATH = Path("passenger_cache.json")
+TEMP_DIR = Path(tempfile.gettempdir()) 
+TEMP_CSV_PATH = TEMP_DIR / "temp_manifest.csv"
+
+TEMP_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,7 +71,7 @@ if app_mode == "Run Dispatch Pipeline":
     if uploaded_file is not None:
         if st.button("🚀 Process Manifest & Optimize Shuttles"):
             with st.spinner("Executing pipeline modules..."):
-                with open("temp_manifest.csv", "wb") as f:
+                with open(TEMP_CSV_PATH, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
                 date_str = target_date.strftime("%Y-%m-%d")
@@ -78,7 +83,7 @@ if app_mode == "Run Dispatch Pipeline":
                     st.stop()
 
                 # 1. Flight Cache is utilized internally here within the extraction/live lookup phase
-                columns, rows = run_extraction_pipeline(settings, csv_path="temp_manifest.csv")
+                columns, rows = run_extraction_pipeline(settings, csv_path=TEMP_CSV_PATH)
                 optimized_rows = run_optimization_pipeline(rows, max_wait_hours=max_wait)
                 output_columns = ["Pickup Group ID", "Target Vehicle Dispatch", "Passenger Wait Time"] + columns
 

@@ -5,8 +5,6 @@ services:
       dockerfile: Dockerfile
     container_name: flight-checker-app
     restart: always
-    # Map the current root so that flight_cache.json and passenger_cache.json persist 
-    # directly on the host file system instead of disappearing when the container stops
     volumes:
       - .:/app
     environment:
@@ -25,7 +23,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./auth:/etc/nginx/auth:ro
-      # Mount the host certificates directory directly into Nginx
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/zenzic-site:/var/www/zenzic-site:ro
     depends_on:
       - app
