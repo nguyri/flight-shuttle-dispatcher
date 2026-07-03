@@ -19,9 +19,8 @@ from app.models import ManifestRow
 logger = logging.getLogger(__name__)
 
 _FLIGHT_CODE_PATTERN = re.compile(
-    r"(?:(?:航班号|航班):\s*)([A-Za-z0-9]+)|\b([A-Za-z]{2,3}\d{1,4})\b"
+    r"(?:(?:航班号|航班):\s*)([A-Za-z0-9]+)|\b([A-Za-z]{1,3}\d{1,4})\b"
 )
-
 
 def normalize_date_for_api(raw_date_str: Optional[str]) -> str:
     """Ensures a date string matches the YYYY-MM-DD format required by AeroDataBox."""
