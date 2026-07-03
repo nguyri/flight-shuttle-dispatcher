@@ -27,7 +27,10 @@ RUN chown -R appuser:appuser /app
 # Switch to the non-root user
 ARG UID=1000
 ARG GID=1000
-RUN groupadd -g $GID appuser && useradd -u $UID -g $GID -m appuser
+RUN groupadd -g $GID -f appuser && \
+    (id -u $UID >/dev/null 2>&1 || useradd -u $UID -g $GID -m appuser)
+WORKDIR /app
+COPY --chown=appuser:appuser . .
 USER appuser
 
 # Expose Streamlit's default port
