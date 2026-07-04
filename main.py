@@ -13,6 +13,7 @@ from app.extraction import guess_name_column
 from app.optimizer import run_optimization_pipeline
 from app.pdf_output import save_pipeline_to_pdf
 from app.pipeline import run_extraction_pipeline
+from app.viewer import render_interactive_passenger_table
 
 # Configuration paths for both caches
 FLIGHT_CACHE_PATH = Path("flight_cache.json")
@@ -33,35 +34,18 @@ st.title("✈️ Flight Checker & Cache Manager")
 
 with st.expander("📋 **Image to CSV Prompt:**"):
     st.code(
-        "Can you parse the data in these pictures into a single table with headers: "
+        "Can you parse the data in these pictures into a single table with headers: \n"
         "No.\tInvoice\tName (Last First)\tAGE\tContact Info\tFLT Info\tPick Time\t"
         "Pick-up\tDrop-off\tMeal\tPlay Option / Activities\tRoom\tNext Itinerary\tOP Note",
-        language="text"
     )
 
-# View Mode Selection
-st.subheader("Select View Mode")
-if PASSENGER_CACHE_PATH.exists():
-    try:
-        # Get last modified time of the passenger cache file
-        mtime = PASSENGER_CACHE_PATH.stat().st_mtime
-        last_updated = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %I:%M:%S %p")
-        
-        # Display as a subtle green success sub-indicator
-        st.caption(f"🟢 **Passenger Cache Status:** Live (Last generated: `{last_updated}`)")
-    except Exception:
-        st.caption("⚠️ **Passenger Cache Status:** Unable to read file stats.")
-else:
-    st.caption("🔴 **Passenger Cache Status:** No local cache file found. Run a new pipeline to initialize.")
+# Sidebar routing configuration selector
+app_mode = st.sidebar.radio("Choose Mode", ["Run Flight Checker", "View Cache"])
 
-app_mode = st.radio(label="Select View Mode",options=["Run Dispatch Pipeline", "View Cached Data Files"], horizontal=True, label_visibility="collapsed")
+if app_mode == "Run Flight Checker":
+    st.subheader("Run Flight Checker")
 
-st.markdown("---") # Thin divider line before the rest of the layout logic
-
-if app_mode == "Run Dispatch Pipeline":
-    st.subheader("Run Shuttle Dispatch Pipeline")
-    
-    st.sidebar.header("Pipeline Configurations")
+    st.sidebar.header("Checker Configurations")
     arrival_iata = st.sidebar.text_input("Target Arrival IATA Code", value="YYC").upper()
     target_date = st.sidebar.date_input("Target Operational Date")
     max_wait = st.sidebar.slider("Maximum Passenger Wait Window (Hours)", 1.0, 4.0, 2.0, step=0.5)
@@ -82,7 +66,7 @@ if app_mode == "Run Dispatch Pipeline":
                     st.error(str(e))
                     st.stop()
 
-                # 1. Flight Cache is utilized internally here within the extraction/live lookup phase
+                # Execute core business logic modules
                 columns, rows = run_extraction_pipeline(settings, csv_path=TEMP_CSV_PATH)
                 optimized_rows = run_optimization_pipeline(rows, max_wait_hours=max_wait)
                 output_columns = ["Pickup Group ID", "Target Vehicle Dispatch", "Passenger Wait Time"] + columns
@@ -93,17 +77,18 @@ if app_mode == "Run Dispatch Pipeline":
                     "Flight Code", "Arrival", "Status", "Origin Airport", "Wait time"
                 )]
                 name_col = guess_name_column(original_columns) or (original_columns[0] if original_columns else "Passenger Name")
+                contact_col = next((c for c in original_columns if "CONTACT" in c.upper() or "PHONE" in c.upper()), None)
 
-                # Build final presentation data structure
+                # Dynamically construct and flatten raw data model into view dictionary structures
                 summary_rows = []
                 passenger_cache_payload = {}
 
                 for idx, row in enumerate(optimized_rows):
-                    # Check international status dynamically or through row attributes
                     is_intl = getattr(row, "is_international", lambda: False)() if hasattr(row, "is_international") else False
-                    dispatch_str = row.dispatch_time.strftime("%Y-%m-%d %H:%M") if getattr(row, "dispatch_time", None) else "MANUAL REVIEW"
+                    dispatch_str = row.dispatch_time.strftime("%H:%M") if getattr(row, "dispatch_time", None) else "MANUAL REVIEW"
                     
                     p_name = row.get(name_col, f"Passenger_{idx}") if hasattr(row, "get") else getattr(row, "name", f"Passenger_{idx}")
+                    p_phone = row.get(contact_col, "N/A") if contact_col else "N/A"
                     flt_code = getattr(row, "flight_code", "N/A")
                     arr_time = str(getattr(row, "scheduled_arrival", "N/A")).replace("\n", " ")
                     origin = str(getattr(row, "origin_airport", "N/A")).replace("\n", " ")
@@ -111,28 +96,30 @@ if app_mode == "Run Dispatch Pipeline":
 
                     record = {
                         "Name": p_name,
+                        "Contact Info": p_phone,
                         "Flight Code": flt_code,
                         "Arrival Time": arr_time,
                         "Origin Airport": origin,
                         "International": bool(is_intl),
                         "Dispatch Time": dispatch_str,
-                        "Group ID": group_id
+                        "Group ID": group_id,
+                        "SMS Status": "Not Sent",
+                        "Send SMS": False
                     }
                     summary_rows.append(record)
                     
-                    # Add to passenger cache dictionary using unique name-flight combo or incremental ID
                     p_cache_key = f"{p_name.replace(' ', '')}_{flt_code}_{date_str}_{idx}"
                     passenger_cache_payload[p_cache_key] = record
 
-                # 2. Persist the generated passenger schedule into its separate cache file
+                # Save the populated operational matrix layout right down to disk cache index
                 with open(PASSENGER_CACHE_PATH, "w", encoding="utf-8") as f:
-                    json.dump(passenger_cache_payload, f, indent=4)
+                    json.dump(passenger_cache_payload, f, indent=4, ensure_ascii=False)
                 st.success(f"Successfully cached {len(passenger_cache_payload)} optimized passenger records to `{PASSENGER_CACHE_PATH.name}`!")
 
-                # Render Table View
+                # Render Interactive Layout View via viewer engine
                 st.write(f"#### Streamlined Table View (Total Rows: {len(summary_rows)})")
                 summary_df = pd.DataFrame(summary_rows)
-                st.dataframe(summary_df, width='stretch', hide_index=True)
+                render_interactive_passenger_table(summary_df, cache_save_path=PASSENGER_CACHE_PATH, cache_key_prefix="live_pipeline")
             else:
                 st.error("Pipeline failure. Check file formatted logs.")
 
@@ -153,17 +140,18 @@ else:
             if not p_data:
                 st.warning("Passenger dispatch cache exists but is empty.")
             else:
-                # Direct parsing of the cached schema
+                # Unroll cache key records mapping cleanly back out into an interactive dataframe footprints
                 records = list(p_data.values())
                 p_df = pd.DataFrame(records)
                 
-                # Reordering to ensure International column visibility
-                cols = ["Name", "Flight Code", "Intl.", "Dispatch Time", "Group ID", "Arrival Time", "Origin Airport"]
-                # Select only the columns that actually exist in the dataframe
+                # Setup specific viewing column sequence
+                cols = ["Name", "Contact Info", "Flight Code", "Dispatch Time","SMS Status", "Send SMS", "Group ID", "Arrival Time", "Origin Airport" ]
                 valid_cols = [c for c in cols if c in p_df.columns]
                 p_df = p_df[valid_cols]
                 
-                st.dataframe(p_df, width='stretch', hide_index=True)
+                st.markdown("### 🗄️ Stored Operational Logs Explorer")
+                # Direct lookup tracking and message triggers shared out of the same unified table layout function!
+                render_interactive_passenger_table(p_df, cache_save_path=PASSENGER_CACHE_PATH, cache_key_prefix="cache_explorer")
                 
     elif cache_type == "Flight API Data Cache":
         st.markdown(f"Reading from local system path: `{FLIGHT_CACHE_PATH}`")
@@ -178,7 +166,6 @@ else:
             else:
                 f_records = []
                 for uniquely_identified_key, details in f_data.items():
-                    # Unique IDs are stored as FlightCode_Date_Time
                     key_parts = uniquely_identified_key.split("_")
                     flt_code = key_parts[0] if len(key_parts) > 0 else "Unknown"
                     
