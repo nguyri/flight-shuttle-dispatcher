@@ -8,10 +8,12 @@ import pandas as pd
 import streamlit as st
 import datetime
 
+from app import ai_parser
 from app.config import load_settings_from_env
 from app.extraction import guess_name_column
 from app.optimizer import run_optimization_pipeline
 from app.pdf_output import save_pipeline_to_pdf
+from app.ai_parser import generate_prompt, extract_table_from_image
 from app.pipeline import run_extraction_pipeline
 from app.viewer import render_interactive_passenger_table
 
@@ -32,12 +34,14 @@ logging.basicConfig(
 st.set_page_config(page_title="Flight & Passenger Dispatcher", layout="wide")
 st.title("✈️ Flight Checker & Cache Manager")
 
+MANIFEST_HEADERS = [
+    "No.", "Invoice", "Name (Last First)", "AGE", "Contact Info", "FLT Info", 
+    "Pick Time", "Pick-up", "Drop-off", "Meal", "Play Option / Activities", 
+    "Room", "Next Itinerary", "OP Note"
+]
+
 with st.expander("📋 **Image to CSV Prompt:**"):
-    st.code(
-        "Can you parse the data in these pictures into a single table with headers: \n"
-        "No.\tInvoice\tName (Last First)\tAGE\tContact Info\tFLT Info\tPick Time\t"
-        "Pick-up\tDrop-off\tMeal\tPlay Option / Activities\tRoom\tNext Itinerary\tOP Note",
-    )
+    st.code(ai_parser.generate_prompt(target_headers=MANIFEST_HEADERS))
 
 # Sidebar routing configuration selector
 app_mode = st.sidebar.radio("Choose Mode", ["Run Flight Checker", "View Cache"])
@@ -50,13 +54,69 @@ if app_mode == "Run Flight Checker":
     target_date = st.sidebar.date_input("Target Operational Date")
     max_wait = st.sidebar.slider("Maximum Passenger Wait Window (Hours)", 1.0, 4.0, 2.0, step=0.5)
 
-    uploaded_file = st.file_uploader("Choose a Manifest CSV file", type=["csv"])
+ # UI routing option
+    input_type = st.radio("Select Input Manifest Source:", ["Upload CSV", "Upload Image(s) (AI Extraction)"], horizontal=True)
+    
+    # Initialize state keys if they don't exist yet
+    if "df_payload" not in st.session_state:
+        st.session_state["df_payload"] = None
 
-    if uploaded_file is not None:
-        if st.button("🚀 Process Manifest & Optimize Shuttles"):
+    if input_type == "Upload CSV":
+        uploaded_file = st.file_uploader("Choose a Manifest CSV file", type=["csv"])
+        if uploaded_file is not None:
+            # Load right into pandas immediately
+            try:
+                st.session_state["df_payload"] = pd.read_csv(uploaded_file)
+                # Keep backup file path mirror intact
+                st.session_state["df_payload"].to_csv(TEMP_CSV_PATH, index=False)
+            except Exception as e:
+                st.error(f"Failed to read CSV: {e}")
+    else:
+        uploaded_images = st.file_uploader("Upload Image(s) of the Manifest Table", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+        
+        if uploaded_images:
+            st.info(f"📸 {len(uploaded_images)} image(s) staged for AI extraction.")
+            
+            if st.button("🤖 AI Extract All Tables"):
+                with st.spinner("Gemini is processing, merging, and writing the manifest payload to disk..."):
+                    try:
+                        from app.ai_parser import batch_extract_and_save_csv
+                        
+                        # Extract and save internally
+                        combined_df = batch_extract_and_save_csv(
+                            image_files=uploaded_images, 
+                            target_headers=MANIFEST_HEADERS, 
+                            output_csv_path=TEMP_CSV_PATH
+                        )
+                        
+                        # Cache the ENTIRE dataframe structure inside session state!
+                        st.session_state["df_payload"] = combined_df
+                        st.success("🎉 AI successfully processed and generated your operational manifest CSV file!")
+                        
+                    except Exception as e:
+                        st.error(f"Pipeline Interrupted: {e}")
+
+    # Display data preview whenever data exists in state memory (Removes the .head(5) limitation)
+    if st.session_state["df_payload"] is not None:
+        st.markdown(f"### Current Staged Manifest Preview (Total Rows: {len(st.session_state['df_payload'])})")
+        st.dataframe(st.session_state["df_payload"])
+
+        # Calculate dynamic metrics for the cache indicator badge
+        row_count = len(st.session_state["df_payload"])
+        source_label = "AI Vision Extraction" if input_type != "Upload CSV" else "CSV Upload"
+        
+        row_count = len(st.session_state["df_payload"])
+        abs_path = TEMP_CSV_PATH.resolve()
+        st.success(
+            f"✅ **CSV Cache Ready** | `{row_count}` rows staged in memory.\n\n"
+            f"📍 **Target File Path:** `{abs_path}`"
+        )
+
+        if st.button("🚀 Check Flights"):
             with st.spinner("Executing pipeline modules..."):
-                with open(TEMP_CSV_PATH, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+                
+                # Make SURE the file on disk perfectly matches the current active state memory
+                st.session_state["df_payload"].to_csv(TEMP_CSV_PATH, index=False)
 
                 date_str = target_date.strftime("%Y-%m-%d")
 
@@ -79,7 +139,6 @@ if app_mode == "Run Flight Checker":
                 name_col = guess_name_column(original_columns) or (original_columns[0] if original_columns else "Passenger Name")
                 contact_col = next((c for c in original_columns if "CONTACT" in c.upper() or "PHONE" in c.upper()), None)
 
-                # Dynamically construct and flatten raw data model into view dictionary structures
                 summary_rows = []
                 passenger_cache_payload = {}
 
@@ -111,12 +170,11 @@ if app_mode == "Run Flight Checker":
                     p_cache_key = f"{p_name.replace(' ', '')}_{flt_code}_{date_str}_{idx}"
                     passenger_cache_payload[p_cache_key] = record
 
-                # Save the populated operational matrix layout right down to disk cache index
                 with open(PASSENGER_CACHE_PATH, "w", encoding="utf-8") as f:
                     json.dump(passenger_cache_payload, f, indent=4, ensure_ascii=False)
-                st.success(f"Successfully cached {len(passenger_cache_payload)} optimized passenger records to `{PASSENGER_CACHE_PATH.name}`!")
+                st.success(f"Successfully cached {len(passenger_cache_payload)} optimized passenger records!")
 
-                # Render Interactive Layout View via viewer engine
+                # Render Interactive Layout View
                 st.write(f"#### Streamlined Table View (Total Rows: {len(summary_rows)})")
                 summary_df = pd.DataFrame(summary_rows)
                 render_interactive_passenger_table(summary_df, cache_save_path=PASSENGER_CACHE_PATH, cache_key_prefix="live_pipeline")
